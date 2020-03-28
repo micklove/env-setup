@@ -1,0 +1,44 @@
+# Add with 
+# see the .gitignore_global file, for details on making these ignores globally available.
+
+# .ide
+.idea
+*.ipr
+*.iml
+
+# pkgs #
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+ 
+# Compiled #
+*.com
+*.class
+*.dll
+*.exe
+*.o
+
+*.so
+# Logs, dbs #
+*.log
+*.sql
+*.sqlite
+
+node_modules
+
+# OS generated files #
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+ 
+
+
