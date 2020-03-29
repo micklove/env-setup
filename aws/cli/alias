@@ -19,16 +19,24 @@
 #
 who = sts get-caller-identity
 whoisme = aws sts get-caller-identity --query UserId --output text
-lambdas = lambda list-functions --query 'Functions[].FunctionName' --output table
 tables = dynamodb list-tables --query 'TableNames'
 
-# See gist
+# See gist, for details on the awscli
 # https://gist.github.com/micklove/76b2cb13ea4d86f4b5f4ec42b0f9939b
 
 
 #===================
-# vpc
+#  __   _____  ___
+#  \ \ / / _ \/ __|
+#   \ V /|  _/ (__
+#    \_/ |_|  \___|
 #===================
+##
+## List or set your region
+##
+region = !f() {
+    [[ $# -eq 1 ]] && aws configure set region "$1" || aws configure get region;
+  }; f
 
 ##
 ## List vpcs by name
@@ -63,15 +71,87 @@ subnets =
         | jq -r ". | .[]"
     }; f
 
+##
+## List all security groups, sorted by Group Name
+##
+sgs =
+    !f() {
+      aws ec2 describe-security-groups \
+        --query "SecurityGroups[].[GroupId, GroupName]" \
+        --output text \
+        | sort -k 2
+    }; f
 
-#===================
-# CodePipeline
-#===================
+
+##
+## list all security group port ranges open to 0.0.0.0/0
+##
+public-ports = ec2 describe-security-groups \
+  --filters Name=ip-permission.cidr,Values=0.0.0.0/0 \
+  --query 'SecurityGroups[].{
+    GroupName:GroupName,
+    GroupId:GroupId,
+    PortRanges:
+      IpPermissions[?contains(IpRanges[].CidrIp, `0.0.0.0/0`)].[
+        join(`:`, [IpProtocol, join(`-`, [to_string(FromPort), to_string(ToPort)])])
+      ][]
+  }'
+
+##
+## Dump a table of info on the NAT gateways
+##
+nats = ec2 describe-nat-gateways \
+    --query "NatGateways[].{VpcId:VpcId, NatGatewayId: NatGatewayId, SubnetId: SubnetId, PublicIp: NatGatewayAddresses[].PublicIp | [0], PrivateIp: NatGatewayAddresses[].PrivateIp | [0] }" \
+    --output table
+
+#======================================================
+#    _        _    ___      _
+#   /_\  _ __(_)  / __|__ _| |_ _____ __ ____ _ _  _
+#  / _ \| '_ \ | | (_ / _` |  _/ -_) V  V / _` | || |
+# /_/ \_\ .__/_|  \___\__,_|\__\___|\_/\_/\__,_|\_, |
+#       |_|                                     |__/
+#======================================================
+apis = apigateway get-rest-apis --output table
+
+# =====================================
+#  _               _        _
+# | |   __ _ _ __ | |__  __| |__ _
+# | |__/ _` | '  \| '_ \/ _` / _` |
+# |____\__,_|_|_|_|_.__/\__,_\__,_|
+#
+#======================================
+lambdas = lambda list-functions --query 'Functions[].FunctionName' --output table
+
+
+last-log =
+  !f() {
+    group="$1"
+
+    if ! stream="$(aws logs describe-log-streams --log-group-name "$group" \
+    --max-items 1 --order-by LastEventTime --descending \
+    --query "logStreams[0].logStreamName" --output "text")"; then
+        return 1
+    fi
+
+    stream="${stream%[[:space:]]None}"
+
+    aws logs get-log-events --log-group-name "$group" --log-stream-name "$stream" \
+    --query "events[].message" --output "text"
+  }; f
+
+#===========================================================
+#   ____          _      ____  _            _ _
+#  / ___|___   __| | ___|  _ \(_)_ __   ___| (_)_ __   ___
+# | |   / _ \ / _` |/ _ \ |_) | | '_ \ / _ \ | | '_ \ / _ \
+# | |__| (_) | (_| |  __/  __/| | |_) |  __/ | | | | |  __/
+#  \____\___/ \__,_|\___|_|   |_| .__/ \___|_|_|_| |_|\___|
+#                               |_|
+#===========================================================
 
 ##
 ## List CodePipeline instances by name
 ##
-pipes2 =
+pipes =
   !f() {
       aws codepipeline list-pipelines --query 'pipelines[].name | sort (@)' | jq -r '.[]'
   }; f
@@ -199,7 +279,6 @@ profiles =
 #
 #================
 
-sgs = ec2 describe-security-groups --query "SecurityGroups[].[GroupId, GroupName]" --output text | sort -k 2
 
 running-instances = ec2 describe-instances \
     --filter Name=instance-state-name,Values=running \
@@ -259,6 +338,40 @@ ostypes =
          | uniq -c \
          | sort -r
   }; g
+
+asgs = autoscaling describe-auto-scaling-groups \
+    --query 'AutoScalingGroups[].{Name: AutoScalingGroupName, DesiredCapacity: DesiredCapacity, MinSize: MinSize, MaxSize: MaxSize, Instances: Instances}'
+
+asg-settings = autoscaling describe-auto-scaling-groups \
+  --query "AutoScalingGroups[].{MDesired:DesiredCapacity, ASGName:AutoScalingGroupName, Min:MinSize, Max:MaxSize, lbname:LoadBalancerNames, LCName:LaunchConfigurationName, HealthCheckType:HealthCheckType}" \
+  --output table
+
+##
+## Print a table, with the status of the instances, for the given ASG
+## e.g. aws asg-instance my-auto-scaling-group
+##
+asg-instance =
+  !f() {
+    printf "\n\n,------------------------------------------------------------------------------\n"
+    printf "|  ASG: [%s]\n" "${1}"
+    aws autoscaling describe-auto-scaling-groups \
+      --query 'AutoScalingGroups[?AutoScalingGroupName ==`'$1'`].Instances[].{id:InstanceId, AZ:AvailabilityZone, HealthStatus:HealthStatus,LifecycleState:LifecycleState }' \
+      --output table
+  };f
+
+##
+## Print a table, with the status of the instances, for each ASG returned by the query
+##
+asg-instances =
+  !f() {
+    for i in $(aws autoscaling describe-auto-scaling-groups \
+      --query 'AutoScalingGroups[].AutoScalingGroupName | join(`"\n"`, @)' \
+      --output text)
+      do
+        aws asg-instance ${i}
+    done
+  }; f
+
 
 #======================================================
 #       _                 _ _             _ _
