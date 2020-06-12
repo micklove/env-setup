@@ -122,10 +122,11 @@ apis = apigateway get-rest-apis --output table
 #======================================
 lambdas = lambda list-functions --query 'Functions[].FunctionName' --output table
 
+# Get all log groups, sort by byte size, convert to GB, and filter to those of size 500mb or more (0.5GB in this case)
 logs-by-size =
   !f() {
     aws logs describe-log-groups \
-    | jq '[.logGroups[] | {logGroupName: .logGroupName, storedBytes: .storedBytes}] | sort_by(.storedBytes)'
+    | jq '[.logGroups[] | {logGroupName: .logGroupName, storedBytes: (.storedBytes/1024/1024/1024), format: "GB", creationTime: (.creationTime/1000 | todateiso8601)}] | sort_by(.storedBytes) | .[] | select(.storedBytes >= 0.5)'
   }; f
 
 last-log =
