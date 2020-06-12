@@ -122,6 +122,11 @@ apis = apigateway get-rest-apis --output table
 #======================================
 lambdas = lambda list-functions --query 'Functions[].FunctionName' --output table
 
+logs-by-size =
+  !f() {
+    aws logs describe-log-groups \
+    | jq '[.logGroups[] | {logGroupName: .logGroupName, storedBytes: .storedBytes}] | sort_by(.storedBytes)'
+  }; f
 
 last-log =
   !f() {
